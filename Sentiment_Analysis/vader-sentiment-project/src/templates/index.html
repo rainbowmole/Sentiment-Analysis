@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Sentiment Analyzer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:18px}
+    textarea{width:100%;height:140px;padding:8px;font-size:14px}
+    .controls{margin-top:8px}
+    .chart{width:300px;height:300px;display:inline-block;margin:10px;vertical-align:top}
+    pre{background:#f6f6f6;padding:10px;white-space:pre-wrap}
+    #status{margin:8px 0;color:#555}
+  </style>
+</head>
+<body>
+  <h2>Sentiment Analyzer</h2>
+  <textarea id="text" placeholder="Type or paste text here..."></textarea>
+  <div class="controls">
+    <button id="go">Analyze</button>
+    <span id="status">Idle</span>
+  </div>
+
+  <h3>Summary</h3>
+  <pre id="summary">—</pre>
+
+  <h3>Overall</h3>
+  <div class="chart"><canvas id="overallPie"></canvas></div>
+
+  <div id="context"></div>
+  <div id="segments"></div>
+
+<script>
+function setStatus(msg, isError=false){
+  const s = document.getElementById('status');
+  s.textContent = msg;
+  s.style.color = isError ? 'crimson' : '#555';
+}
+
+async function analyzeText() {
+  const button = document.getElementById('go');
+  const text = document.getElementById('text').value;
+  if (!text.trim()) {
+    setStatus('Enter some text first', true);
+    return;
+  }
+
+  button.disabled = true;
+  setStatus('Analyzing...');
+  console.log('Sending text to /analyze:', text.substring(0,200));
+
+  try {
+    const resp = await fetch('http://127.0.0.1:8000/analyze', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({text})
+    });
+
+    if (!resp.ok) {
+      // try to get JSON error, otherwise plain text
+      let body;
+      try { body = await resp.json(); }
+      catch { body = await resp.text(); }
+      console.error('Server error', resp.status, body);
+      setStatus('Server error: ' + (body.error || body || resp.status), true);
+      document.getElementById('summary').textContent = JSON.stringify(body, null, 2);
+      button.disabled = false;
+      return;
+    }
+
+    // parse JSON result
+    const data = await resp.json();
+    console.log('Received analysis result', data);
+    document.getElementById('summary').textContent = data.summary || 'No summary';
+    if (data.context) {
+      document.getElementById('context').textContent = `Tone: ${data.context.tone_label || 'unknown'}; Emotion: ${data.context.main_emotion || 'none'}; Targets: ${(data.context.main_targets||[]).join(', ')}`;
+    } else {
+      document.getElementById('context').textContent = '';
+    }
+
+    drawPie('overallPie', [data.overall.pos, data.overall.neu, data.overall.neg], ['Positive','Neutral','Negative']);
+
+    const segDiv = document.getElementById('segments');
+    segDiv.innerHTML = '';
+    (data.segments || []).forEach((seg, idx) => {
+      const container = document.createElement('div');
+      container.innerHTML = `<h4>Segment ${idx+1}</h4><pre>${seg.text}</pre><div style="display:flex;align-items:flex-start"></div>`;
+      const chartDiv = document.createElement('div'); chartDiv.className='chart';
+      const canvas = document.createElement('canvas'); canvas.id = 'pie'+idx; chartDiv.appendChild(canvas);
+      container.querySelector('div').appendChild(chartDiv);
+      const details = document.createElement('pre');
+      details.textContent = JSON.stringify(seg.structure || seg.vader, null, 2);
+      container.querySelector('div').appendChild(details);
+      segDiv.appendChild(container);
+      drawPie(canvas.id, [seg.vader.pos, seg.vader.neu, seg.vader.neg], ['Positive','Neutral','Negative']);
+    });
+
+    setStatus('Done');
+  } catch (err) {
+    console.error('Fetch failed', err);
+    setStatus('Network/JS error: see console', true);
+    document.getElementById('summary').textContent = String(err);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function drawPie(id, values, labels) {
+  const ctx = (typeof id === 'string') ? document.getElementById(id).getContext('2d') : id.getContext('2d');
+  if (!ctx) return;
+  if (ctx._chart) ctx._chart.destroy();
+  ctx._chart = new Chart(ctx, {
+    type: 'pie',
+    data: { labels, datasets: [{ data: values, backgroundColor:['#66c2a5','#8da0cb','#fc8d62'] }] },
+    options: { responsive: false }
+  });
+}
+
+document.getElementById('go').addEventListener('click', analyzeText);
+
+// optional: allow Ctrl+Enter to submit
+document.getElementById('text').addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === 'Enter') analyzeText();
+});
+</script>
+</body>
+</html>

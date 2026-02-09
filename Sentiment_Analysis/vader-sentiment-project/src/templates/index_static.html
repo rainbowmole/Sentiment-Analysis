@@ -1,0 +1,121 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Sentiment Analyzer (static)</title>
+  <script src="https://unpkg.com/sentiment@5.0.2/dist/sentiment.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:18px}
+    textarea{width:100%;height:140px;padding:8px;font-size:14px}
+    .controls{margin-top:8px}
+    .chart{width:300px;height:300px;display:inline-block;margin:10px;vertical-align:top}
+    pre{background:#f6f6f6;padding:10px;white-space:pre-wrap}
+    #status{margin:8px 0;color:#555}
+  </style>
+</head>
+<body>
+  <h2>Sentiment Analyzer (static)</h2>
+  <textarea id="text" placeholder="Type or paste text here...">I love matcha</textarea>
+  <div class="controls">
+    <button id="go">Analyze</button>
+    <span id="status">Idle</span>
+  </div>
+
+  <h3>Summary</h3>
+  <pre id="summary">—</pre>
+
+  <h3>Overall</h3>
+  <div class="chart"><canvas id="overallPie"></canvas></div>
+
+  <div id="context"></div>
+  <div id="segments"></div>
+
+<script>
+const sentiment = new Sentiment();
+
+function setStatus(msg, isError=false){
+  const s = document.getElementById('status');
+  s.textContent = msg;
+  s.style.color = isError ? 'crimson' : '#555';
+}
+
+function toneLabelFromScore(score) {
+  const absS = Math.abs(score);
+  const intensity = absS >= 3 ? 'very' : (absS >= 1.5 ? 'moderately' : 'mildly');
+  if (score > 0.25) return `${intensity} positive`;
+  if (score < -0.25) return `${intensity} negative`;
+  return 'neutral';
+}
+
+function drawPie(id, values, labels) {
+  const ctx = (typeof id === 'string') ? document.getElementById(id).getContext('2d') : id.getContext('2d');
+  if (!ctx) return;
+  if (ctx._chart) ctx._chart.destroy();
+  ctx._chart = new Chart(ctx, {
+    type: 'pie',
+    data: { labels, datasets: [{ data: values, backgroundColor:['#66c2a5','#8da0cb','#fc8d62'] }] },
+    options: { responsive: false }
+  });
+}
+
+async function analyzeText() {
+  setStatus('Analyzing...');
+  const text = document.getElementById('text').value || '';
+  if (!text.trim()) { setStatus('Enter text', true); return; }
+
+  try {
+    const res = sentiment.analyze(text);
+    // res: { score, comparative, tokens, words, positive, negative }
+    const pos = (res.positive || []).length;
+    const neg = (res.negative || []).length;
+    const tokens = res.tokens || [];
+    const neu = Math.max(0, tokens.length - pos - neg);
+
+    // summary & context
+    const tone = toneLabelFromScore(res.score);
+    const strong = (res.positive.concat(res.negative)).slice(0,5);
+    const context = {
+      tone_label: tone,
+      score: res.score,
+      positive_words: res.positive,
+      negative_words: res.negative,
+      strong_words: strong
+    };
+
+    document.getElementById('summary').textContent = `Score: ${res.score}  Comparative: ${res.comparative.toFixed(3)}\nPositive: ${res.positive.join(', ')}\nNegative: ${res.negative.join(', ')}`;
+    document.getElementById('context').textContent = `Tone: ${context.tone_label}; Strong words: ${context.strong_words.join(', ')}`;
+
+    drawPie('overallPie', [pos || 1, neu || 1, neg || 1], ['Positive','Neutral','Negative']);
+
+    // simple per-sentence segments
+    const segDiv = document.getElementById('segments');
+    segDiv.innerHTML = '';
+    const sents = text.split(/[.!?]\s+/).filter(Boolean);
+    sents.forEach((s, idx) => {
+      const r = sentiment.analyze(s);
+      const c = document.createElement('div');
+      c.innerHTML = `<h4>Segment ${idx+1}</h4><pre>${s}</pre><div style="display:flex;align-items:flex-start"></div>`;
+      const chartDiv = document.createElement('div'); chartDiv.className='chart';
+      const canvas = document.createElement('canvas'); canvas.id = 'pie'+idx; chartDiv.appendChild(canvas);
+      c.querySelector('div').appendChild(chartDiv);
+      const details = document.createElement('pre');
+      details.textContent = `score: ${r.score}, positive: ${r.positive.join(', ')}, negative: ${r.negative.join(', ')}`;
+      c.querySelector('div').appendChild(details);
+      segDiv.appendChild(c);
+      drawPie(canvas.id, [ (r.positive||[]).length || 1, Math.max(1, r.tokens.length - (r.positive||[]).length - (r.negative||[]).length), (r.negative||[]).length || 1 ], ['Positive','Neutral','Negative']);
+    });
+
+    setStatus('Done');
+  } catch (e) {
+    console.error(e);
+    setStatus('Error', true);
+    document.getElementById('summary').textContent = String(e);
+  }
+}
+
+document.getElementById('go').addEventListener('click', analyzeText);
+document.getElementById('text').addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') analyzeText(); });
+</script>
+</body>
+</html>
