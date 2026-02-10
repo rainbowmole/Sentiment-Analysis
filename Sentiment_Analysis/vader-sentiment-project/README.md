@@ -38,43 +38,101 @@ Modes
     http://127.0.0.1:8000/vader-sentiment-project/src/templates/index_static.html
     ```
 
-- Terminal / CLI mode (app.py)
-  - Use app.py when you want to run the analyzer from a terminal (no web UI).
-  - Run interactively or show help:
-    ```powershell
-    # interactive / default behavior
-    python vader-sentiment-project\src\app.py
+### S.E.N.T.R.I — Smart Evaluation & Notification for Ticket Ranking Intelligence
 
-    # show CLI options (if available)
-    python vader-sentiment-project\src\app.py -h
-    ```
-  - Expected behavior:
-    - Running app.py will start a simple command-line interface to analyze text (enter text at the prompt or pass options shown by `-h`).
-    - If app.py depends on the same analyzer/NLTK resources, ensure you installed requirements and NLTK data first:
-      ```powershell
-      pip install -r vader-sentiment-project\requirements.txt
-      python -c "import nltk; nltk.download('punkt'); nltk.download('averaged_perceptron_tagger')"
-      ```
-  - If you prefer piping text:
-    ```powershell
-    # if app.py supports reading stdin or a text arg (check -h)
-    echo "I love matcha" | python vader-sentiment-project\src\app.py
-    ```
+This repository contains the S.E.N.T.R.I system (built on the original Vader-based analyzer) — a lightweight sentiment-driven ticket prioritization and notification pipeline.
 
-Known problem (what caused "Failed to fetch")
-- Do NOT open `vader-sentiment-project\src\templates\index.html` using file:// in the browser.
-  - index.html expects the Flask backend at `/analyze`. Loading it from the filesystem makes the browser fail to POST (shows "Failed to fetch").
-  - Fix: either (A) run the Flask server and open http://127.0.0.1:8000, or (B) use `index_static.html` for a serverless demo, or (C) use `app.py` for terminal usage.
+## Quick overview
+- **Purpose:** Analyze incoming user messages (support issues, suggestions, recommendations), score them with a multi-factor prioritizer, store results in SQLite, and surface prioritized tickets in a dashboard.
+- **Main components:**
+  - Server: `src/support_server.py` (Flask + dashboard)
+  - Dashboard template: `src/templates/support_dashboard.html`
+  - Analyzer & prioritizer: `src/vader_sentiment` (VADER analyzer, `ticket_prioritizer.py`)
+  - Storage: `src/vader_sentiment/ticket_store.py` (SQLite `support_tickets.db`)
 
-Troubleshooting
-- If you see "Failed to fetch" in the browser:
-  - Confirm you loaded the page from `http://127.0.0.1:8000` (server mode) or opened `index_static.html` directly (static mode).
-  - Check Flask terminal for GET / and POST /analyze logs.
-  - If using PowerShell, avoid the built-in `curl` alias — use `curl.exe` or `Invoke-RestMethod`.
+## Quickstart
+1. Create and activate a virtual environment (PowerShell):
 
-Files
-- Flask app: vader-sentiment-project\src\web_app.py
-- Server UI template: vader-sentiment-project\src\templates\index.html
-- Static demo (no server): vader-sentiment-project\src\templates\index_static.html
-- CLI/terminal interface: vader-sentiment-project\src\app.py
-- Analyzer: vader-sentiment-
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+2. Install dependencies:
+
+```powershell
+pip install -r requirements.txt
+```
+
+3. Start the S.E.N.T.R.I server (from project root):
+
+```powershell
+python src/support_server.py
+```
+
+4. Open the dashboard in your browser:
+
+```
+http://127.0.0.1:5000
+```
+
+## Core API endpoints
+- `POST /api/tickets` — submit a ticket payload: `{ customer_name, message, ticket_type, category }`.
+- `GET /api/tickets` — returns tickets grouped by priority and dashboard stats.
+- `POST /api/analyze` — run analysis on text without storing (returns `priority_data`).
+- `PATCH /api/tickets/{id}/status` — update ticket status (new, in-progress, resolved).
+- `DELETE /api/tickets/{id}` — delete ticket.
+- `GET /api/stats` — summary metrics.
+
+## Data pipeline (Input / Process / Output)
+- **Input:**
+  - Sources: Dashboard form, Email ingestors, Webhooks (Zendesk, Jira, GitHub), Slack, or external connectors.
+  - Payload: JSON with `message` and optional metadata (`customer_name`, `ticket_type`, `category`).
+
+- **Process:**
+  - Ingest: Flask API normalizes payloads and forwards them to the analyzer.
+  - Sentiment Analysis: Uses the VADER lexicon via `SentimentAnalyzer` to compute sentiment and compound scores.
+  - Emotion & Keyword Detection: Lightweight heuristics detect anger/joy/sadness plus urgent/severe keywords.
+  - Prioritization: `TicketPrioritizer` combines compound score, emotion boosts, keyword flags, and ticket-type adjustments to compute a `priority_score` (0..1) and map to a tier:
+    - Critical: score >= 0.70
+    - High: 0.40 <= score < 0.70
+    - Normal: score < 0.40
+
+- **Output:**
+  - Stored ticket object: `{ id, message, ticket_type, category, priority, priority_score, emotion, compound, flagged_keywords, reason, status, created_at }` persisted in `support_tickets.db`.
+  - Dashboard: displays grouped tickets, metrics, and actions for agents.
+  - Integrations: Notifier can send webhooks/Slack/email for critical/high tickets.
+
+## Visual flowchart (Mermaid)
+```mermaid
+flowchart LR
+  UI[User Dashboard / API]
+  Ingest[Flask API / Ingest Worker]
+  Analyzer[Sentiment Analyzer (VADER)]
+  Prioritizer[TicketPrioritizer (keywords, emotion, rules)]
+  Store[SQLite TicketStore]
+  Dashboard[Support Dashboard (S.E.N.T.R.I)]
+  Integrations[Slack / Jira / Email / Webhooks]
+
+  UI --> Ingest --> Analyzer --> Prioritizer --> Store
+  Store --> Dashboard
+  Prioritizer --> Integrations
+```
+
+## Notes & tips
+- If you already have a `support_tickets.db` from a prior run and you changed the schema, back it up before starting the server (the app will recreate the DB if missing).
+- To test quickly with PowerShell:
+
+```powershell
+Invoke-RestMethod -Uri 'http://127.0.0.1:5000/api/tickets' -Method Post -ContentType 'application/json' -Body (@{ customer_name='QA'; message='The system is down'; ticket_type='support'; category='performance' } | ConvertTo-Json)
+```
+
+## Where to look in the code
+- Server: `src/support_server.py`
+- Dashboard template: `src/templates/support_dashboard.html`
+- Prioritizer: `src/vader_sentiment/ticket_prioritizer.py`
+- Store: `src/vader_sentiment/ticket_store.py`
+- Analyzer & utilities: `src/vader_sentiment/*.py`
+
+---
+Updated to S.E.N.T.R.I naming and documentation.
